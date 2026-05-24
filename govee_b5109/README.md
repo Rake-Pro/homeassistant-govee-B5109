@@ -1,43 +1,56 @@
 # Govee B5109 MQTT Bridge
 
-Home Assistant add-on that bridges a single **Govee B5109** sensor to MQTT.
+Home Assistant add-on that bridges a single **Govee H5109 / B5109** sensor
+to MQTT.
 
-Unlike most Govee devices, the B5109 does not work with the public Govee
-Developer API and is not supported by community Govee integrations. This
-addon polls the same private cloud endpoint the Govee mobile app uses
-(`app2.govee.com/device/rest/devices/v1/list`) using a bearer token and
-clientId captured from a real app session, parses the B5109's temperature
-from `deviceExt.lastDeviceData.tem`, and republishes to MQTT with Home
-Assistant discovery.
+The B5109 is not supported by the public Govee Developer API or by community
+Govee integrations. This addon polls the private cloud endpoint the Govee
+mobile app uses for live readings:
 
-Approach borrowed from [clong/govee_h5042_sensor](https://github.com/clong/govee_h5042_sensor),
-but scoped to the B5109 and delivered as an MQTT bridge instead of REST sensors.
+```
+GET https://app2.govee.com/th/rest/devices/v1/multi-datas
+        ?currentTime=<ms>&device=<MAC>&sku=H5109
+```
+
+using a bearer token + clientId captured from a real app session, and
+republishes temperature to MQTT with Home Assistant discovery (plus
+best-effort battery — see Notes).
 
 ## Install (Local Add-on)
 
 1. Copy `govee_b5109/` to `/addons/govee_b5109/` on your Home Assistant host.
 2. Settings -> Add-ons -> Add-on Store -> menu -> **Check for updates**.
-3. "Local add-ons" -> **Govee B5109 MQTT Bridge** -> Install.
+3. Local add-ons -> **Govee B5109 MQTT Bridge** -> Install.
 
-## Capture credentials
+## Capture credentials and device ID
 
 1. Install Proxyman on iOS (or equivalent on Android).
-2. SSL-proxy `app2.govee.com`, install the cert, run the Govee app.
-3. Find a `POST https://app2.govee.com/device/rest/devices/v1/list` request.
-4. From its headers, copy:
+2. SSL-proxy `app2.govee.com`, install the cert, then open the Govee app
+   and view the H5109 sensor so the app fetches a reading.
+3. In Proxyman find a request to:
+   `GET https://app2.govee.com/th/rest/devices/v1/multi-datas?...`
+4. From its headers and URL, copy:
    - `Authorization: Bearer <token>` -> `bearer_token`
    - `clientId: <id>` -> `client_id`
+   - URL param `device=<MAC>` (URL-decoded - Proxyman shows it decoded) -> `device`
+     Example: `03:30:E0:B5:00:00:00:0C:FF:FF:00:55:FF:FF:00:45`
+   - URL param `sku=<SKU>` -> `sku` (defaults to `H5109`)
 
-Tokens expire. When polling starts returning 401, recapture and update.
+The bearer token expires (JWT `exp` claim, weeks to months). When polling
+starts returning 401, recapture and update.
 
 ## Configuration
 
 ```yaml
 bearer_token: "eyJ..."
 client_id: "abc123..."
-device_name: "Pool"             # exact name of the B5109 in the Govee app
-poll_interval: 60               # seconds, 10-3600
-unit: "F"                       # C or F (publishes temperature in this unit)
+device: "03:30:E0:B5:00:00:00:0C:FF:FF:00:55:FF:FF:00:45"
+sku: "H5109"
+friendly_name: "Govee B5109"      # shown in HA as the device name
+poll_interval: 60                  # seconds, 10-3600
+unit: "F"                          # C or F
+timezone: "America/Los_Angeles"    # mirrored to the timezone header
+country: "US"                      # mirrored to the country header
 mqtt_host: "core-mosquitto"
 mqtt_port: 1883
 mqtt_username: ""
@@ -48,14 +61,14 @@ log_level: "info"
 
 ## MQTT topics
 
-Slug = `device_name` lower-cased, non-alphanumeric -> `_`.
+Slug = `friendly_name` lower-cased, non-alphanumeric -> `_`.
 
 | Topic | Purpose |
 |---|---|
 | `homeassistant/sensor/govee_b5109_<slug>/temperature/config` | HA discovery (retained) |
 | `homeassistant/sensor/govee_b5109_<slug>/battery/config` | HA discovery (retained) |
 | `govee_b5109/<slug>/state` | JSON state (retained) |
-| `govee_b5109/<slug>/availability` | `online` / `offline` |
+| `govee_b5109/<slug>/availability` | `online` / `offline` (LWT) |
 
 State payload:
 
@@ -64,22 +77,26 @@ State payload:
 ```
 
 `temperature` honours the `unit` setting. `temperature_c` is always Celsius
-for graphing across unit changes. `battery` is best-effort; see Notes.
+so historical graphs stay continuous if you flip units.
 
 ## Notes
 
-- The reference shell script only parses temperature, so the exact battery
-  field name in `lastDeviceData` is unconfirmed. The bridge tries
-  `battery`, `batteryLevel`, `bat`, `power`, `electricity` and logs the full
-  `lastDeviceData` JSON on the first successful poll. If the battery sensor
-  stays `null`, check the log for the real key.
-- `tem` is centi-Celsius (`2580` = 25.80 degC). F = C * 9/5 + 32.
+- The response shape of `/multi-datas` is not yet hard-coded in the parser.
+  The bridge logs the full response on its first successful poll (look for
+  `First poll response` in the add-on log). Paste that back so the parser
+  can be tightened to the exact JSON path.
+- Until then the parser walks the response and grabs the first numeric key
+  named `tem` / `temperature` / `temCur` (assumed centi-Celsius, divided by
+  100), and for battery: `battery` / `batteryLevel` / `bat` / `power` /
+  `electricity`.
+- F = C * 9/5 + 32.
 
 ## Standalone (no HA addon)
 
 ```
 pip install -r requirements.txt
-BEARER_TOKEN=... CLIENT_ID=... DEVICE_NAME="Pool" \
+BEARER_TOKEN=... CLIENT_ID=... \
+  DEVICE="03:30:E0:B5:...:45" SKU=H5109 \
   MQTT_HOST=... MQTT_USERNAME=... MQTT_PASSWORD=... \
   python3 govee_b5109.py
 ```
