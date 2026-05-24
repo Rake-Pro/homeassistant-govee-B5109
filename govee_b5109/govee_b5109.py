@@ -23,6 +23,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 import paho.mqtt.client as mqtt
@@ -71,7 +72,7 @@ def load_options() -> dict:
 @dataclass
 class Reading:
     temp_c: Optional[float]
-    battery: Optional[float]
+    last_seen: Optional[str]
     raw_response: dict
 
 
@@ -129,13 +130,13 @@ def parse_reading(device: dict) -> Reading:
         ldd = {}
     tem = ldd.get("tem")
     temp_c = float(tem) / 100.0 if isinstance(tem, (int, float)) else None
-    battery: Optional[float] = None
-    for key in ("battery", "batteryLevel", "bat", "power", "electricity"):
-        v = ldd.get(key)
-        if isinstance(v, (int, float)):
-            battery = float(v)
-            break
-    return Reading(temp_c=temp_c, battery=battery, raw_response=ldd)
+    last_time_ms = ldd.get("lastTime")
+    last_seen: Optional[str] = None
+    if isinstance(last_time_ms, (int, float)) and last_time_ms > 0:
+        last_seen = datetime.fromtimestamp(
+            last_time_ms / 1000.0, tz=timezone.utc
+        ).isoformat()
+    return Reading(temp_c=temp_c, last_seen=last_seen, raw_response=ldd)
 
 
 class MqttPublisher:
@@ -203,14 +204,12 @@ class MqttPublisher:
             "availability_topic": self._avail_topic(),
             "device": device_block,
         }
-        battery_cfg = {
-            "name": "Battery",
-            "unique_id": f"{TOPIC_ROOT}_{self.uid}_battery",
+        last_seen_cfg = {
+            "name": "Last Seen",
+            "unique_id": f"{TOPIC_ROOT}_{self.uid}_last_seen",
             "state_topic": self._state_topic(),
-            "value_template": "{{ value_json.battery }}",
-            "unit_of_measurement": "%",
-            "device_class": "battery",
-            "state_class": "measurement",
+            "value_template": "{{ value_json.last_seen }}",
+            "device_class": "timestamp",
             "entity_category": "diagnostic",
             "availability_topic": self._avail_topic(),
             "device": device_block,
@@ -221,8 +220,15 @@ class MqttPublisher:
             retain=True,
         )
         self.client.publish(
+            f"{self.discovery_prefix}/sensor/{TOPIC_ROOT}_{self.slug}/last_seen/config",
+            json.dumps(last_seen_cfg),
+            retain=True,
+        )
+        # Retained-empty publish to evict any stale battery discovery from
+        # earlier versions of the addon.
+        self.client.publish(
             f"{self.discovery_prefix}/sensor/{TOPIC_ROOT}_{self.slug}/battery/config",
-            json.dumps(battery_cfg),
+            "",
             retain=True,
         )
         self._discovery_sent = True
@@ -238,8 +244,8 @@ class MqttPublisher:
             temp_value = round(reading.temp_c, 2)
         payload = {
             "temperature": temp_value,
-            "battery": reading.battery,
             "temperature_c": round(reading.temp_c, 2) if reading.temp_c is not None else None,
+            "last_seen": reading.last_seen,
         }
         self.client.publish(self._state_topic(), json.dumps(payload), retain=True)
         self.client.publish(self._avail_topic(), "online", retain=True)
@@ -319,11 +325,7 @@ def main() -> int:
                         json.dumps(reading.raw_response),
                     )
                 publisher.publish_reading(reading)
-                logging.debug(
-                    "Published temp_c=%s battery=%s",
-                    reading.temp_c,
-                    reading.battery,
-                )
+                logging.debug("Published temp_c=%s", reading.temp_c)
                 consecutive_errors = 0
         except requests.HTTPError as e:
             consecutive_errors += 1

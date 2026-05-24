@@ -1,5 +1,5 @@
 name: "Govee B5109 MQTT Bridge"
-version: "0.3.0"
+version: "0.4.0"
 slug: "govee_b5109"
 description: "Polls the Govee mobile-app cloud (multi-datas endpoint) for a Govee H5109/B5109 sensor and republishes temperature (and best-effort battery) to MQTT with Home Assistant discovery."
 arch:
