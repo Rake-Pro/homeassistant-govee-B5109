@@ -1,0 +1,39 @@
+name: "Govee B5109 MQTT Bridge"
+version: "0.1.0"
+slug: "govee_b5109"
+description: "Polls the Govee mobile-app cloud for a Govee B5109 sensor and republishes temperature (and best-effort battery) to MQTT with Home Assistant discovery."
+arch:
+  - amd64
+  - aarch64
+  - armv7
+  - armhf
+  - i386
+init: false
+startup: services
+boot: auto
+host_network: false
+hassio_api: false
+options:
+  bearer_token: ""
+  client_id: ""
+  device_name: ""
+  poll_interval: 60
+  unit: "F"
+  mqtt_host: "core-mosquitto"
+  mqtt_port: 1883
+  mqtt_username: ""
+  mqtt_password: ""
+  mqtt_discovery_prefix: "homeassistant"
+  log_level: "info"
+schema:
+  bearer_token: str
+  client_id: str
+  device_name: str
+  poll_interval: int(10,3600)
+  unit: list(C|F)
+  mqtt_host: str
+  mqtt_port: port
+  mqtt_username: str?
+  mqtt_password: password?
+  mqtt_discovery_prefix: str
+  log_level: list(debug|info|warning|error)
