@@ -23,12 +23,12 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Optional
 
 import paho.mqtt.client as mqtt
 import requests
 
-GOVEE_URL = "https://app2.govee.com/th/rest/devices/v1/multi-datas"
+GOVEE_URL = "https://app2.govee.com/device/rest/devices/v1/list"
 OPTIONS_PATH = "/data/options.json"
 TOPIC_ROOT = "govee_b5109"
 
@@ -80,8 +80,7 @@ def slugify(text: str) -> str:
     return slug or "b5109"
 
 
-def fetch_device(opts: dict) -> dict:
-    now_ms = int(time.time() * 1000)
+def fetch_device_list(opts: dict) -> dict:
     timestamp_header = f"{time.time() * 1000:.6f}"
     headers = {
         "Host": "app2.govee.com",
@@ -100,57 +99,43 @@ def fetch_device(opts: dict) -> dict:
         "country": opts["country"],
         "iotVersion": "0",
     }
-    params = {
-        "currentTime": str(now_ms),
-        "device": opts["device"],
-        "sku": opts["sku"],
-    }
-    resp = requests.get(GOVEE_URL, headers=headers, params=params, timeout=15)
+    resp = requests.post(GOVEE_URL, headers=headers, timeout=15)
     resp.raise_for_status()
     return resp.json()
 
 
-def _walk_for_key(obj: Any, candidates: tuple[str, ...]) -> Optional[float]:
-    """Depth-first search for a numeric value under any key in candidates.
-
-    The /multi-datas response shape is not yet documented in this project;
-    walking the tree avoids hard-coding a path that might be wrong. The
-    first numeric hit wins.
-    """
-    if isinstance(obj, dict):
-        for key in candidates:
-            if key in obj:
-                v = obj[key]
-                if isinstance(v, (int, float)) and not isinstance(v, bool):
-                    return float(v)
-                if isinstance(v, str):
-                    try:
-                        return float(v)
-                    except ValueError:
-                        pass
-        for v in obj.values():
-            found = _walk_for_key(v, candidates)
-            if found is not None:
-                return found
-    elif isinstance(obj, list):
-        for item in obj:
-            found = _walk_for_key(item, candidates)
-            if found is not None:
-                return found
-    return None
+def find_device(payload: dict, sku: str, device_id: str) -> Optional[dict]:
+    """Return the device dict matching SKU (and optional device MAC) from /list."""
+    sku_l = sku.strip().lower()
+    dev_l = device_id.strip().lower() if device_id else ""
+    matches = []
+    for dev in payload.get("devices", []):
+        if (dev.get("sku") or "").strip().lower() != sku_l:
+            continue
+        if dev_l and (dev.get("device") or "").strip().lower() != dev_l:
+            continue
+        matches.append(dev)
+    if not matches:
+        return None
+    return matches[0]
 
 
-def parse_reading(payload: dict) -> Reading:
-    # /multi-datas response shape unconfirmed; we search the tree for the
-    # temperature key (centi-celsius in every Govee endpoint observed so
-    # far) and a battery-like key. First-poll log dumps the full payload
-    # so the parser can be tightened.
-    raw_tem = _walk_for_key(payload, ("tem", "temperature", "temCur"))
-    temp_c = raw_tem / 100.0 if raw_tem is not None else None
-    battery = _walk_for_key(
-        payload, ("battery", "batteryLevel", "bat", "power", "electricity")
-    )
-    return Reading(temp_c=temp_c, battery=battery, raw_response=payload)
+def parse_reading(device: dict) -> Reading:
+    ext = device.get("deviceExt") or {}
+    ldd_raw = ext.get("lastDeviceData") or "{}"
+    try:
+        ldd = json.loads(ldd_raw) if isinstance(ldd_raw, str) else ldd_raw
+    except json.JSONDecodeError:
+        ldd = {}
+    tem = ldd.get("tem")
+    temp_c = float(tem) / 100.0 if isinstance(tem, (int, float)) else None
+    battery: Optional[float] = None
+    for key in ("battery", "batteryLevel", "bat", "power", "electricity"):
+        v = ldd.get(key)
+        if isinstance(v, (int, float)):
+            battery = float(v)
+            break
+    return Reading(temp_c=temp_c, battery=battery, raw_response=ldd)
 
 
 class MqttPublisher:
@@ -280,7 +265,7 @@ def main() -> int:
     level = getattr(logging, opts["log_level"].upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s [%(levelname)s] %(message)s")
 
-    missing = [k for k in ("bearer_token", "client_id", "device", "sku") if not opts.get(k)]
+    missing = [k for k in ("bearer_token", "client_id", "sku") if not opts.get(k)]
     if missing:
         logging.error("missing required options: %s", ", ".join(missing))
         return 2
@@ -306,24 +291,40 @@ def main() -> int:
 
     while _RUN:
         try:
-            payload = fetch_device(opts)
-            reading = parse_reading(payload)
-            if not first_dump_logged:
-                logging.info(
-                    "First poll response (paste this back to tighten the parser): %s",
-                    json.dumps(reading.raw_response),
+            payload = fetch_device_list(opts)
+            device = find_device(payload, opts["sku"], opts["device"])
+            if device is None:
+                skus_seen = sorted(
+                    {(d.get("sku") or "") for d in payload.get("devices", [])}
                 )
-                first_dump_logged = True
-            if reading.temp_c is None:
                 logging.warning(
-                    "No temperature key found in response; raw=%s",
-                    json.dumps(reading.raw_response),
+                    "No device matched sku=%s device=%r; SKUs in account: %s",
+                    opts["sku"],
+                    opts["device"],
+                    skus_seen,
                 )
-            publisher.publish_reading(reading)
-            logging.debug(
-                "Published temp_c=%s battery=%s", reading.temp_c, reading.battery
-            )
-            consecutive_errors = 0
+                consecutive_errors += 1
+            else:
+                reading = parse_reading(device)
+                if not first_dump_logged:
+                    logging.info(
+                        "First poll matched device=%s lastDeviceData=%s",
+                        device.get("device"),
+                        json.dumps(reading.raw_response),
+                    )
+                    first_dump_logged = True
+                if reading.temp_c is None:
+                    logging.warning(
+                        "No 'tem' in lastDeviceData; raw=%s",
+                        json.dumps(reading.raw_response),
+                    )
+                publisher.publish_reading(reading)
+                logging.debug(
+                    "Published temp_c=%s battery=%s",
+                    reading.temp_c,
+                    reading.battery,
+                )
+                consecutive_errors = 0
         except requests.HTTPError as e:
             consecutive_errors += 1
             logging.error(
