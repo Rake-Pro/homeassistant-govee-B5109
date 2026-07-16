@@ -112,6 +112,7 @@ def _app_headers(opts: dict, token: Optional[str] = None) -> dict:
 
 
 def govee_login(opts: dict) -> str:
+    logging.info("Logging in to Govee for a new token")
     body = {
         "email": opts["email"],
         "password": opts["password"],
@@ -386,7 +387,11 @@ def main() -> int:
         except AuthError as e:
             consecutive_errors += 1
             if can_login:
-                logging.warning("Auth failed (%s); re-login next cycle", e)
+                logging.warning(
+                    "Auth failed (%s); re-login in %ds",
+                    e,
+                    poll * min(consecutive_errors + 1, 5),
+                )
                 token = None
             else:
                 logging.error(
