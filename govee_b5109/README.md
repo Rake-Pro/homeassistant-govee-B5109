@@ -36,13 +36,18 @@ best-effort battery — see Notes).
      Example: `03:30:E0:B5:00:00:00:0C:FF:FF:00:55:FF:FF:00:45`
    - URL param `sku=<SKU>` -> `sku` (defaults to `H5109`)
 
-The bearer token expires (JWT `exp` claim, weeks to months). When polling
-starts returning 401, recapture and update.
+The bearer token expires (~57 days). Set `email` + `password` and the addon
+logs in by itself — at startup if `bearer_token` is empty, and automatically
+whenever the current token starts getting rejected. With credentials set you
+never need to recapture; `bearer_token` becomes optional (only `client_id`
+still has to come from a capture, once).
 
 ## Configuration
 
 ```yaml
-bearer_token: "eyJ..."
+bearer_token: "eyJ..."             # optional if email+password are set
+email: ""                          # Govee account, enables auto-login
+password: ""
 client_id: "abc123..."
 device: "03:30:E0:B5:00:00:00:0C:FF:FF:00:55:FF:FF:00:45"
 sku: "H5109"

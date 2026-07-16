@@ -30,11 +30,14 @@ import paho.mqtt.client as mqtt
 import requests
 
 GOVEE_URL = "https://app2.govee.com/device/rest/devices/v1/list"
+LOGIN_URL = "https://app2.govee.com/account/rest/account/v1/login"
 OPTIONS_PATH = "/data/options.json"
 TOPIC_ROOT = "govee_b5109"
 
 DEFAULTS = {
     "bearer_token": "",
+    "email": "",
+    "password": "",
     "client_id": "",
     "device": "",
     "sku": "H5109",
@@ -82,13 +85,15 @@ def slugify(text: str) -> str:
     return slug or "b5109"
 
 
-def fetch_device_list(opts: dict) -> dict:
-    timestamp_header = f"{time.time() * 1000:.6f}"
+class AuthError(Exception):
+    pass
+
+
+def _app_headers(opts: dict, token: Optional[str] = None) -> dict:
     headers = {
         "Host": "app2.govee.com",
-        "Authorization": f"Bearer {opts['bearer_token']}",
         "Accept": "*/*",
-        "timestamp": timestamp_header,
+        "timestamp": f"{time.time() * 1000:.6f}",
         "envId": "0",
         "clientId": opts["client_id"],
         "appVersion": opts["app_version"],
@@ -101,9 +106,53 @@ def fetch_device_list(opts: dict) -> dict:
         "country": opts["country"],
         "iotVersion": "0",
     }
-    resp = requests.post(GOVEE_URL, headers=headers, timeout=15)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def govee_login(opts: dict) -> str:
+    body = {
+        "email": opts["email"],
+        "password": opts["password"],
+        "client": opts["client_id"],
+    }
+    resp = requests.post(
+        LOGIN_URL, headers=_app_headers(opts), json=body, timeout=15
+    )
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    # Success payload nests the session under "client" (some deployments
+    # have used "data"); anything without a token is a failed login.
+    blk = data.get("client") or data.get("data") or {}
+    token = blk.get("token") if isinstance(blk, dict) else None
+    if not token:
+        raise AuthError(
+            f"login failed: status={data.get('status')} message={data.get('message')!r}"
+        )
+    logging.info(
+        "Govee login OK (tokenExpireCycle=%s)", blk.get("tokenExpireCycle")
+    )
+    return token
+
+
+def fetch_device_list(opts: dict, token: str) -> dict:
+    resp = requests.post(GOVEE_URL, headers=_app_headers(opts, token), timeout=15)
+    if resp.status_code == 401:
+        raise AuthError("HTTP 401 from device list")
+    resp.raise_for_status()
+    payload = resp.json()
+    # Errors come back as HTTP 200 with the real status in the body
+    # (401 = expired token, 400 = appVersion too low, ...).
+    if isinstance(payload, dict):
+        status = payload.get("status")
+        if status == 401:
+            raise AuthError(f"token rejected: {payload.get('message')!r}")
+        if status is not None and status != 200:
+            raise RuntimeError(
+                f"Govee API status {status}: {payload.get('message')!r}"
+            )
+    return payload
 
 
 def find_device(payload: dict, sku: str, device_id: str) -> Optional[dict]:
@@ -272,7 +321,10 @@ def main() -> int:
     level = getattr(logging, opts["log_level"].upper(), logging.INFO)
     logging.basicConfig(level=level, format="%(asctime)s [%(levelname)s] %(message)s")
 
-    missing = [k for k in ("bearer_token", "client_id", "sku") if not opts.get(k)]
+    missing = [k for k in ("client_id", "sku") if not opts.get(k)]
+    can_login = bool(opts.get("email") and opts.get("password"))
+    if not opts.get("bearer_token") and not can_login:
+        missing.append("bearer_token (or email + password)")
     if missing:
         logging.error("missing required options: %s", ", ".join(missing))
         return 2
@@ -295,10 +347,13 @@ def main() -> int:
     first_dump_logged = False
     poll = int(opts["poll_interval"])
     consecutive_errors = 0
+    token: Optional[str] = opts["bearer_token"] or None
 
     while _RUN:
         try:
-            payload = fetch_device_list(opts)
+            if token is None:
+                token = govee_login(opts)
+            payload = fetch_device_list(opts, token)
             device = find_device(payload, opts["sku"], opts["device"])
             if device is None:
                 skus_seen = sorted(
@@ -328,6 +383,17 @@ def main() -> int:
                 publisher.publish_reading(reading)
                 logging.debug("Published temp_c=%s", reading.temp_c)
                 consecutive_errors = 0
+        except AuthError as e:
+            consecutive_errors += 1
+            if can_login:
+                logging.warning("Auth failed (%s); re-login next cycle", e)
+                token = None
+            else:
+                logging.error(
+                    "Auth failed (%s) and no email/password configured; "
+                    "recapture bearer_token or set email + password",
+                    e,
+                )
         except requests.HTTPError as e:
             consecutive_errors += 1
             logging.error(
