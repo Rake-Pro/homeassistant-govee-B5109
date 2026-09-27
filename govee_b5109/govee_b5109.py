@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Bridge a single Govee H5109 / B5109 sensor to MQTT.
 
-Polls the Govee mobile-app endpoint
-    GET https://app2.govee.com/th/rest/devices/v1/multi-datas
-            ?currentTime=<ms>&device=<MAC>&sku=<SKU>
+Polls the Govee mobile-app device list endpoint
+    POST https://app2.govee.com/device/rest/devices/v1/list
 
-using a bearer token and clientId captured from a real Govee app request.
-Publishes temperature (and best-effort battery) to MQTT with Home Assistant
-discovery.
+and picks the configured device by SKU and MAC, using a bearer token and
+clientId captured from a real Govee app request. Publishes temperature and a
+last-seen timestamp to MQTT with Home Assistant discovery.
 
 Config source: /data/options.json (HA addon) or environment variables of the
 same uppercase names for standalone use.
@@ -45,7 +44,7 @@ DEFAULTS = {
     "friendly_name": "Govee B5109",
     "poll_interval": 60,
     "unit": "F",
-    "timezone": "America/Los_Angeles",
+    "timezone": "UTC",
     "country": "US",
     "mqtt_host": "core-mosquitto",
     "mqtt_port": 1883,
