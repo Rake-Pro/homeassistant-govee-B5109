@@ -1,5 +1,5 @@
 name: "Govee B5109 MQTT Bridge"
-version: "0.6.1"
+version: "0.6.2"
 slug: "govee_b5109"
 description: "Polls the Govee mobile-app cloud (multi-datas endpoint) for a Govee H5109/B5109 sensor and republishes temperature (and best-effort battery) to MQTT with Home Assistant discovery."
 arch:
@@ -24,7 +24,7 @@ options:
   friendly_name: "Govee B5109"
   poll_interval: 60
   unit: "F"
-  timezone: "America/Los_Angeles"
+  timezone: "UTC"
   country: "US"
   mqtt_host: "core-mosquitto"
   mqtt_port: 1883

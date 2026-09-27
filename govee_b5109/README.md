@@ -33,7 +33,7 @@ best-effort battery — see Notes).
    - `Authorization: Bearer <token>` -> `bearer_token`
    - `clientId: <id>` -> `client_id`
    - URL param `device=<MAC>` (URL-decoded - Proxyman shows it decoded) -> `device`
-     Example: `03:30:E0:B5:00:00:00:0C:FF:FF:00:55:FF:FF:00:45`
+     Example: `AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99`
    - URL param `sku=<SKU>` -> `sku` (defaults to `H5109`)
 
 The bearer token expires (~57 days). Set `email` + `password` and the addon
@@ -49,12 +49,12 @@ bearer_token: "eyJ..."             # optional if email+password are set
 email: ""                          # Govee account, enables auto-login
 password: ""
 client_id: "abc123..."
-device: "03:30:E0:B5:00:00:00:0C:FF:FF:00:55:FF:FF:00:45"
+device: "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
 sku: "H5109"
 friendly_name: "Govee B5109"      # shown in HA as the device name
 poll_interval: 60                  # seconds, 10-3600
 unit: "F"                          # C or F
-timezone: "America/Los_Angeles"    # mirrored to the timezone header
+timezone: "UTC"                    # mirrored to the timezone header
 country: "US"                      # mirrored to the country header
 mqtt_host: "core-mosquitto"
 mqtt_port: 1883
@@ -101,7 +101,7 @@ so historical graphs stay continuous if you flip units.
 ```
 pip install -r requirements.txt
 BEARER_TOKEN=... CLIENT_ID=... \
-  DEVICE="03:30:E0:B5:...:45" SKU=H5109 \
+  DEVICE="AA:BB:CC:DD:EE:FF:...:99" SKU=H5109 \
   MQTT_HOST=... MQTT_USERNAME=... MQTT_PASSWORD=... \
   python3 govee_b5109.py
 ```
